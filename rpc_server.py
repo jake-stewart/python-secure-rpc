@@ -8,7 +8,7 @@ import traceback
 import threading
 
 try:
-    from AES_RSA_encryption import ServerEncryptionHandler
+    from aes_rsa_encryption import ServerEncryptionHandler
     HAS_ENCRYPTION = 1
 except:
     print("WARNING: NO ENCRYPTION LIBRARY INSTALLED")
