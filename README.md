@@ -1,7 +1,7 @@
 # Python Secure RPC
 Work in progress for uni assignment.
 
-### Security rundown:
+### Security
 1. Client encrypts their data using AES.
 2. Client encrypts AES key using server's public RSA key.
 3. Server decrypts AES key using their private RSA key.
