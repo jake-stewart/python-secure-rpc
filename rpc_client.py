@@ -6,7 +6,7 @@ from utils import compact_json
 from exceptions import *
 
 try:
-    from AES_RSA_encryption import ClientEncryptionHandler
+    from aes_rsa_encryption import ClientEncryptionHandler
     HAS_ENCRYPTION = 1
 except:
     # in a production setting, this application would come
