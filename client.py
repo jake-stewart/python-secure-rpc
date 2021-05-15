@@ -169,7 +169,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     client_app = ClientApplication(root)
     client_app.pack(fill="both", expand=True, pady=10, padx=10)
-    root.resizable(width=False, height=True)
+    root.resizable(width=False, height=False)
     root.minsize(450, 400)
     root.maxsize(450, 1000)
     root.mainloop()
