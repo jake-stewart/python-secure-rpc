@@ -1,14 +1,14 @@
 import json
+import tableprint
 
 try:
+    from hashlib import pbkdf2_hmac
     from base64 import b64encode, b64decode
-    from Crypto.Hash import SHA256
-    from Crypto import Random
-    HAS_ENCRYPTION = 1
-
+    from os import urandom
+    CAN_HASH = 1
 except:
-    print("WARNING: StudentManager lacks Pycryptodome necessary for password hashing")
-    HAS_ENCRYPTION = 0
+    print("WARNING: StudentManager lacks modules necessary for password hashing")
+    CAN_HASH = 0
 
 
 # enum for record fields
@@ -25,11 +25,18 @@ class StudentDatabase:
             print(file_name, "does not exist... Creating new database.")
             self.new_database()
 
+    def __len__(self):
+        return len(self._students)
+
     def __contains__(self, username):
         return username in self._students
 
     def __str__(self):
         return "StudentDatabase [" + ", ".join(self._students) + "]"
+
+    def get_students(self):
+        for student, data in self._students.items():
+            yield student, data
 
     def get_results(self, username):
         return self._students[username][RESULTS_INDEX]
@@ -47,32 +54,37 @@ class StudentDatabase:
 
     def new_database(self):
         self._students = {}
-        self._hashed = HAS_ENCRYPTION
+        self._hashed = CAN_HASH
 
     def load_from_file(self):
         with open(self._file_name, "r") as f:
             self._hashed, self._students = json.load(f)
 
-        if self._hashed and not HAS_ENCRYPTION:
-            raise ValueError(
-                self._file + " is hashed but Pycryptodome is not installed"
+        if self._hashed and not CAN_HASH:
+            print(
+                "ERROR:", self._file_name,
+                "is hashed but the required modules are not installed."
             )
+            exit(1)
 
     def save_to_file(self):
         with open(self._file_name, "w") as f:
-            self._students = json.dump([self._hashed, self._students], f)
+            json.dump([self._hashed, self._students], f)
 
     def add_student(self, username, password):
         if self._hashed:
-            password_bytes = bytes(password, encoding="UTF-8")
+            salt_bytes = urandom(32)
+            password_bytes = password.encode("UTF-8")
 
-            salt_bytes = Random.new().read(32)
+            hash_bytes = pbkdf2_hmac(
+                "SHA256",
+                password_bytes,
+                salt_bytes,
+                100000
+            )
 
-            hasher = SHA256.new()
-            hasher.update(salt_bytes + password_bytes)
-
-            hash_string = hasher.hexdigest()
             salt_string = b64encode(salt_bytes).decode()
+            hash_string = b64encode(hash_bytes).decode()
 
             self._students[username] = [[salt_string, hash_string], []]
 
@@ -85,24 +97,47 @@ class StudentDatabase:
     def check_credentials(self, username, password):
         if self._hashed:
             try:
-                salt_string, hash_string = self._students[username][PASSWORD_INDEX]
+                salt_string, actual_hash = self._students[username][PASSWORD_INDEX]
             except KeyError:
                 return False
 
             salt_bytes = b64decode(salt_string)
+            password_bytes = password.encode("UTF-8")
 
-            password_bytes = bytes(password, encoding="UTF-8")
+            hash_bytes = pbkdf2_hmac(
+                "SHA256",
+                password_bytes,
+                salt_bytes,
+                100000
+            )
 
-            hasher = SHA256.new()
-            hasher.update(salt_bytes + password_bytes)
-
-            return hasher.hexdigest() == hash_string
+            hash_string = b64encode(hash_bytes).decode()
+            return hash_string == actual_hash
 
         else:
             try:
                 return self._students[username][PASSWORD_INDEX] == password
             except KeyError:
                 return False
+
+    def print_student_table(self):
+        table = []
+
+        for student, data in database.get_students():
+            n_units = len(data[RESULTS_INDEX])
+            total = sum(result[1] for result in data[RESULTS_INDEX])
+            avg = str(round(total / n_units, 2))
+
+            if avg[-3] != ".":
+                avg += "0"
+
+            table.append({
+                "Username": student,
+                "Number of Units": n_units,
+                "Average Mark": avg
+            })
+
+        tableprint.print_table(table, ["l", "r", "r"], border_style=1)
 
 
 if __name__ == "__main__":
@@ -125,9 +160,8 @@ if __name__ == "__main__":
             print("")
 
             choice = int_input(prompt)
-            # view students
             if choice == 1:
-                print(database)
+                database.print_student_table()
 
             # add student
             elif choice == 2:

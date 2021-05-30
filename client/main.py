@@ -1,4 +1,5 @@
 from rpc.client import connect
+from rpc.exceptions import *
 import threading
 import tkinter as tk
 from tkinter import font
@@ -58,7 +59,7 @@ class EvaluationPrompt:
 
 
 class LoginPrompt:
-    def __init__(self, parent, username_prompt="Username", password_prompt="Password", show="•"):
+    def __init__(self, parent, error="", username_prompt="Username", password_prompt="Password", show="•"):
         self.parent = parent
 
         self.top = tk.Toplevel(parent)
@@ -83,6 +84,7 @@ class LoginPrompt:
         self.password_input.bind("<Return>", lambda e: self.login())
 
         self.error_message = tk.StringVar()
+        self.error_message.set(error)
         self.error_label = tk.Label(self.top, textvariable=self.error_message, fg="red")
         self.error_label.grid(row=2, column=0, columnspan=2, pady=0, padx=5, sticky="W")
 
@@ -300,6 +302,8 @@ class ClientApplication(ttk.Frame):
     def __init__(self, parent, *args, **kwargs):
         ttk.Frame.__init__(self, parent, *args, **kwargs)
 
+        self.critical_error = False
+
         self.min_results = 12
         self.max_results = 30
 
@@ -441,7 +445,12 @@ class ClientApplication(ttk.Frame):
 
     def connect(self):
         try:
-            self.conn = connect(HOST, PORT)
+            try:
+                self.unsecure_connection = False
+                self.conn = connect(HOST, PORT, encryption="AES_RSA_CTR")
+            except ImportError:
+                self.unsecure_connection = True
+                self.conn = connect(HOST, PORT)
             self.connected = True
         except:
             self.connected = False
@@ -474,7 +483,10 @@ class ClientApplication(ttk.Frame):
             self.login_prompt.incorrect_credentials()
 
     def login(self):
-        self.login_prompt = LoginPrompt(self)
+        if self.unsecure_connection:
+            self.login_prompt = LoginPrompt(self, error="You are using an unsecure connection.")
+        else:
+            self.login_prompt = LoginPrompt(self)
 
     def send_request(self, target, handler, *args, **kwargs):
         if self.thread_running:
@@ -490,23 +502,30 @@ class ClientApplication(ttk.Frame):
             rp = self.conn.__getattr__(target)
             self.response = rp(*args, **kwargs)
             self.thread_running = False
-        except ConnectionRefusedError:
+        except (ConnectionRefusedError, RPCCriticalError):
             self.connected = False
             self.thread_running = False
-        # except:
-        #     messagebox.showerror(
-        #         "Critical Error",
-        #         "This error should be reported immediately."
-        #     )
-        #     exit(1)
+        except:
+            self.connected = False
+            self.thread_running = False
+            self.critical_error = True
 
     def check_thread_status(self):
         if self.thread_running:
             self.after(POLLING_DELAY, self.check_thread_status)
+
         elif not self.connected:
             if self.login_prompt:
                 self.login_prompt.close()
                 self.login_prompt = None
+
+            if self.critical_error:
+                messagebox.showerror(
+                    "Critical Error",
+                    "This error should be reported immediately."
+                )
+                exit(1)
+
             self.check_connection()
         else:
             self.handler()
@@ -530,8 +549,15 @@ if __name__ == "__main__":
     root.minsize(root.winfo_width(), root.winfo_height())
     root.resizable(False, True)
 
-    print("HINT:")
-    print("username: 'testuser'")
-    print("password: 'testpassword'")
+    print("Users you can test out:")
+    print()
+    print("username: 'john.smith'")
+    print("password: 'password1'")
+    print()
+    print("username: 'henry.baker'")
+    print("password: 'p4ssw0rd'")
+    print()
+    print("username: 'sally.turner'")
+    print("password: 'dont_hack_me'")
 
     root.mainloop()

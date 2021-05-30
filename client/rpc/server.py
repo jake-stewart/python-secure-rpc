@@ -1,21 +1,19 @@
 #!/usr/bin/python3
 
+from rpc.utils import compact_json, func_str
+import importlib
 import json
-from rpc.utils import compact_json
-
 import socket
-import traceback
 import threading
+import traceback
 
-try:
-    from rpc.aes_rsa_encryption import ServerEncryptionHandler
-    HAS_ENCRYPTION = True
-except:
-    print("WARNING: NO ENCRYPTION LIBRARY INSTALLED")
-    print("Install Pycryptodome before handling confidential information.")
-    HAS_ENCRYPTION = False
+ENCRYPTION_PROTOCOLS = [
+    "NULL",
+    "AES_RSA_CTR"
+]
 
 # error codes
+SUCCESS = 0
 INVALID_HOOK = 1
 RPC_EXCEPTION = 2
 CRITICAL_ERROR = 3
@@ -28,18 +26,26 @@ EXCEPTION_NAMES = [
     "Client interacted with the server without following protocol."
 ]
 
-
 class Server:
     def __init__(self, host='', port=8080, verbosity=2):
         self._verbosity = verbosity
         self._host = host
         self._port = port
         self._active = False
-        self._hooks = {"connect": self._handle_new_connection}
-        if HAS_ENCRYPTION:
-            self._encryption_handler = ServerEncryptionHandler()
-        else:
-            self._encryption_handler = None
+        self._hooks = {"handshake": self._handshake}
+        self._get_encryption_handlers()
+
+    def _get_encryption_handlers(self):
+        self._encryption_handlers = []
+
+        for protocol in ENCRYPTION_PROTOCOLS:
+            try:
+                handler = importlib.import_module("." + protocol, "rpc").ServerHandler()
+                self._encryption_handlers.append(handler)
+            except ImportError:
+                self._encryption_handlers.append(None)
+                if self._verbosity:
+                    print(protocol, "is not supported on your system.")
 
     def add_hook(self, target):
         self._hooks[target.__name__] = target
@@ -71,80 +77,77 @@ class Server:
                     target=self._connection_handler,
                     args=(connection, host), daemon=True
                 ).start()
+
         except KeyboardInterrupt:
             self.shutdown()
 
-    def _handle_new_connection(self, client_has_encryption):
-        if HAS_ENCRYPTION and client_has_encryption:
-            return [True, self._encryption_handler.get_secret()]
-        else:
-            return [False, None]
+    def _handshake(self, enc_protocol):
+        try:
+            handler = self._encryption_handlers[enc_protocol]
+            success = True
+            public_key = handler.get_public_key()
+        except:
+            success = False
+            public_key = None
+
+        return [success, public_key]
 
     def _connection_handler(self, connection, host):
         if self._verbosity:
             log_string = "Client request from " + host
 
+        # keep track of whether the RPC was executed
+        # the client may want to be informed whether the hook
+        # executed after an error occurs
         hook_processed = False
+
         try:
-            # recieve request
-            encrypted, *enc_args, request = self._recv(connection)
+            auth_layer = self._recv(connection)
+            enc_protocol, enc_args, request = \
+                self._process_auth_layer(auth_layer)
 
-            # remove encryption
-            enc_args, request = self._remove_encryption_layer(encrypted, enc_args, request)
-            hook, args, kwargs = request
-
-            # execute RPC
-            response = self._handle_request(hook, args, kwargs)
+            response = self._execute_rpc(request)
             hook_processed = True
 
             if self._verbosity == 2:
-                log_string += "\n\t" + hook + "("
-                if args:
-                    log_string += ", ".join(map(repr, args))
-                    if kwargs:
-                        log_string += ", "
-                if kwargs:
-                    log_string += ", ".join(
-                        repr(k) + "=" + repr(v) for k, v in kwargs.items()
-                    )
-
-                log_string += ")\n\tEncrypted: " + repr(bool(encrypted))
-
+                log_string += "\n\t" + func_str(*request)
+                log_string += "\n\tEncryption protocol: " + ENCRYPTION_PROTOCOLS[enc_protocol]
                 error_code = response[0]
                 if error_code:
                     log_string += "\n\tException: " + EXCEPTION_NAMES[error_code]
 
             # encrypt output
-            encryption_layer = self._add_encryption_layer(encrypted, enc_args, response)
+            auth_layer = self._create_auth_layer(enc_protocol, enc_args, response)
 
         except:
-            encryption_layer = [0, [CRITICAL_ERROR, hook_processed]]
+            auth_layer = [0, [CRITICAL_ERROR, hook_processed]]
             log_string += "\n\tException: Client didn't follow protocol."
-
-        # send response
-        self._send(connection, encryption_layer)
 
         if self._verbosity:
             print(log_string)
 
-    def _remove_encryption_layer(self, encrypted, enc_args, request):
-        if encrypted:
-            *enc_args, request = self._encryption_handler.decrypt(
-                *enc_args, request
-            )
-        return enc_args, request
+        # send response
+        self._send(connection, auth_layer)
 
-    def _add_encryption_layer(self, encrypted, enc_args, response):
-        if encrypted:
-            return [1, *self._encryption_handler.encrypt(*enc_args, response)]
-        return [0, response]
+    def _process_auth_layer(self, auth_layer):
+        enc_protocol, enc_args, data = auth_layer
+        handler = self._encryption_handlers[enc_protocol]
+        enc_args, decrypted = handler.decrypt(*enc_args, data)
+        return enc_protocol, enc_args, decrypted
 
-    def _handle_request(self, hook, args, kwargs):
+    def _create_auth_layer(self, enc_protocol, enc_args, response):
+        handler = self._encryption_handlers[enc_protocol]
+        enc_args, encrypted = handler.encrypt(*enc_args, response)
+        return [enc_protocol, enc_args, encrypted]
+
+    def _execute_rpc(self, request):
+        hook, args, kwargs = request
+
         if hook not in self._hooks:
             return INVALID_HOOK, None
         try:
             output = self._hooks[hook](*args, **kwargs)
-            return 0, output
+            return SUCCESS, output
 
         except Exception:
             return RPC_EXCEPTION, traceback.format_exc()
@@ -154,13 +157,13 @@ class Server:
         connection.sendall(data.encode("UTF-8"))
 
     def _recv(self, connection):
-        request = []
+        received = []
         while True:
             data = connection.recv(1024)
             if not data:
                 break
-            request.append(data.decode())
+            received.append(data.decode())
             if len(data) < 1024:
                 break
-        return json.loads("".join(request))
+        return json.loads("".join(received))
 

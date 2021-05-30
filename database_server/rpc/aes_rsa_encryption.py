@@ -17,7 +17,7 @@ class ServerEncryptionHandler:
         pub_key = self._private_rsa_key.publickey()
         self._public_rsa_key = pub_key.exportKey().decode()
 
-    def get_secret(self):
+    def get_public_key(self):
         return self._public_rsa_key
 
     def decrypt(self, b64_enc_key, b64_nonce, b64_enc_data):
